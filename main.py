@@ -115,103 +115,97 @@ class VkUser:
                               'comments': data['comments']['count']}
                 list_data_photo.append(data_photo)
             sorted_photo = sorted(list_data_photo, key=itemgetter('likes'))[-4:]
-            try:
-                if int(sorted_photo[0]['likes']) == int(sorted_photo[1]['likes']):
-                    if int(sorted_photo[0]['comments']) > int(sorted_photo[1]['comments']):
-                        sorted_photo.pop(1)
-                    else:
-                        sorted_photo.pop(0)
+            if int(sorted_photo[0]['likes']) == int(sorted_photo[1]['likes']):
+                if int(sorted_photo[0]['comments']) > int(sorted_photo[1]['comments']):
+                    sorted_photo.pop(1)
                 else:
                     sorted_photo.pop(0)
-            except IndexError:
+            else:
                 sorted_photo.pop(0)
             candidate_photos_dict = {'id': candidate['id'], 'photo': sorted_photo}
             list_photos_candidates.append(candidate_photos_dict)
         return list_photos_candidates
 
-    @staticmethod
-    def create_db(list_photos_candidates):
-        for candidate in list_photos_candidates:
-            link = 'https://vk.com/id' + str(candidate['id'])
-            album_photo = candidate['photo']
-            for photo in album_photo:
-                photo = photo['photo_max']
-                with sqlite3.connect('D:\Учеба в IT\Py_advanced\Diplom_VKinder\VKinder\database.db') as db:
-                    cursor = db.cursor()
-                    table_1 = """CREATE TABLE IF NOT EXISTS table_1(id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                                                    link TEXT)"""
-                    table_2 = """CREATE TABLE IF NOT EXISTS table_2(link_id TEXT, photo TEXT, 
-                                                                    FOREIGN KEY (link_id) REFERENCES table_1(id))"""
-                    cursor.execute(table_1)
-                    cursor.execute(f"""SELECT link FROM table_1 WHERE link = '{link}'""")
-                    if cursor.fetchone() is None:
-                        cursor.execute("""INSERT INTO table_1(link) VALUES(?) """, (link,))
+
+def create_db(list_photos_candidates, user_id):
+    for candidate in list_photos_candidates:
+        link = 'https://vk.com/id' + str(candidate['id'])
+        album_photo = candidate['photo']
+        for photo in album_photo:
+            photo = photo['photo_max']
+            with sqlite3.connect(f'D:\Учеба в IT\Py_advanced\Diplom_VKinder\VKinder\database-{user_id}.db') as db:
+                cursor = db.cursor()
+                table_links = """CREATE TABLE IF NOT EXISTS table_links(id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                                link TEXT)"""
+                table_photo = """CREATE TABLE IF NOT EXISTS table_photo(link_id TEXT, photo TEXT, 
+                                                                FOREIGN KEY (link_id) REFERENCES table_links(id))"""
+                cursor.execute(table_links)
+                cursor.execute(f"""SELECT link FROM table_links WHERE link = '{link}'""")
+                if cursor.fetchone() is None:
+                    cursor.execute("""INSERT INTO table_links(link) VALUES(?) """, (link,))
+                else:
+                    print(f"Человек с таким id: {candidate['id']} уже есть в таблице1")
+                cursor.execute(f"""SELECT id FROM table_links WHERE link = '{link}'""")
+                link_id = cursor.fetchone()[0]
+                cursor.execute(table_photo)
+                cursor.execute(f"""INSERT INTO table_photo(link_id, photo) VALUES('{link_id}', '{photo}')""")
+                db.commit()
+    return "Процесс завершен!"
+
+
+def start_bot():
+    while True:
+        for event in longpoll.listen():
+            if event.type == VkEventType.MESSAGE_NEW and event.to_me:
+                request = event.text
+                user = VkUser(event.user_id)
+                if request == "привет":
+                    user.write_msg(event.user_id, f"Хай, {user.get_name()}!\nСейчас подберем тебе пару)\nСекундочку...")
+                    if not user.get_age()[1]:
+                        user.write_msg(event.user_id, "Введите возраст:")
+                        for my_event in longpoll.listen():
+                            if my_event.type == VkEventType.MESSAGE_NEW:
+                                if my_event.to_me:
+                                    age = my_event.text
+                                    break
                     else:
-                        print(f"Человек с таким id: {candidate['id']} уже есть в таблице1")
-                    cursor.execute(f"""SELECT id FROM table_1 WHERE link = '{link}'""")
-                    link_id = cursor.fetchone()[0]
-                    cursor.execute(table_2)
-                    cursor.execute(f"""INSERT INTO table_2(link_id, photo) VALUES('{link_id}', '{photo}')""")
-                    db.commit()
-        return "Процесс завершен!"
+                        age = user.get_age()[0]
+                    if not user.get_city()[1]:
+                        user.write_msg(event.user_id, "Введите город:")
+                        for my_event in longpoll.listen():
+                            if my_event.type == VkEventType.MESSAGE_NEW:
+                                if my_event.to_me:
+                                    city = my_event.text
+                                    break
+                    else:
+                        city = user.get_city()[0]
+                    if not user.get_relation()[1]:
+                        user.write_msg(event.user_id, "Введите номер категории СП"
+                                                      "(1 — не женат (не замужем),"
+                                                      " 5 — всё сложно,"
+                                                      " 6 — в активном поиске):")
+                        for my_event in longpoll.listen():
+                            if my_event.type == VkEventType.MESSAGE_NEW:
+                                if my_event.to_me:
+                                    relation = my_event.text
+                                    break
+                    else:
+                        relation = user.get_relation()[0]
+                    parameters_for_searching = user.parameters_fot_users_search(age, city, relation)
+                    result_for_searching = user.search_candidates(parameters_for_searching)
+                    result_top_3 = user.create_list_candidates(result_for_searching)
+                    list_photos_result_top_3 = user.get_candidates_photos(result_top_3)
+                    db = create_db(list_photos_result_top_3, event.user_id)
+                    user.write_msg(event.user_id, f"Так! Ну смотри, вот что мы нашли\n")
+                    for i in list_photos_result_top_3:
+                        user.write_msg(event.user_id, f"Кандидат : https://vk.com/id{i['id']}\n")
+                        for x in i['photo']:
+                            user.write_msg(event.user_id, f"Фото: {x['photo_max']}")
+                elif request == "пока":
+                    user.write_msg(event.user_id, "Пока((")
+                else:
+                    user.write_msg(event.user_id, "Не поняла вашего ответа...")
 
 
-while True:
-    for event in longpoll.listen():
-        if event.type == VkEventType.MESSAGE_NEW and event.to_me:
-            request = event.text
-            user = VkUser(event.user_id)
-            if request == "привет":
-                user.write_msg(event.user_id, f"Хай, {user.get_name()}!\nСейчас подберем тебе пару)\nСекундочку...")
-                if not user.get_age()[1]:
-                    user.write_msg(event.user_id, "Введите возраст:")
-                    for my_event in longpoll.listen():
-                        if my_event.type == VkEventType.MESSAGE_NEW:
-                            if my_event.to_me:
-                                age = my_event.text
-                                break
-                else:
-                    age = user.get_age()[0]
-                if not user.get_city()[1]:
-                    user.write_msg(event.user_id, "Введите город:")
-                    for my_event in longpoll.listen():
-                        if my_event.type == VkEventType.MESSAGE_NEW:
-                            if my_event.to_me:
-                                city = my_event.text
-                                break
-                else:
-                    city = user.get_city()[0]
-                if not user.get_relation()[1]:
-                    user.write_msg(event.user_id, "Введите номер категории СП"
-                                                  "(1 — не женат (не замужем),"
-                                                  " 5 — всё сложно,"
-                                                  " 6 — в активном поиске):")
-                    for my_event in longpoll.listen():
-                        if my_event.type == VkEventType.MESSAGE_NEW:
-                            if my_event.to_me:
-                                relation = my_event.text
-                                break
-                else:
-                    relation = user.get_relation()[0]
-                parameters_for_searching = user.parameters_fot_users_search(age, city, relation)
-                result_for_searching = user.search_candidates(parameters_for_searching)
-                result_top_3 = user.create_list_candidates(result_for_searching)
-                list_photos_result_top_3 = user.get_candidates_photos(result_top_3)
-                db = user.create_db(list_photos_result_top_3)
-                user.write_msg(event.user_id, f"Так! Ну смотри, вот что мы нашли\n"
-                                              f"Кандидат № 1: https://vk.com/id{list_photos_result_top_3[0]['id']}\n"
-                                              f"Топ-3 фотки:\n{list_photos_result_top_3[0]['photo'][0]['photo_max']}\n"
-                                              f"{list_photos_result_top_3[0]['photo'][1]['photo_max']}\n"
-                                              f"{list_photos_result_top_3[0]['photo'][2]['photo_max']}\n"
-                                              f"Кандидат № 2: https://vk.com/id{list_photos_result_top_3[1]['id']}\n"
-                                              f"Топ-3 фотки:\n{list_photos_result_top_3[1]['photo'][0]['photo_max']}\n"
-                                              f"{list_photos_result_top_3[1]['photo'][1]['photo_max']}\n"
-                                              f"{list_photos_result_top_3[1]['photo'][2]['photo_max']}\n"
-                                              f"Кандидат № 3: https://vk.com/id{list_photos_result_top_3[2]['id']}\n"
-                                              f"Топ-3 фотки:\n{list_photos_result_top_3[2]['photo'][0]['photo_max']}\n"
-                                              f"{list_photos_result_top_3[2]['photo'][1]['photo_max']}\n"
-                                              f"{list_photos_result_top_3[2]['photo'][2]['photo_max']}\n")
-            elif request == "пока":
-                user.write_msg(event.user_id, "Пока((")
-            else:
-                user.write_msg(event.user_id, "Не поняла вашего ответа...")
+if __name__ == '__main__':
+    start_bot()
